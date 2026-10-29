@@ -1192,8 +1192,6 @@ fun ChatScreen(
                 running = running,
                 turnStartAt = turnStartAt,
                 thinkingMs = thinkingMs,
-                thinkingHint = if (running && vm.isLocalProviderActive())
-                    "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）" else null,
                 liveToolsSnapshot = liveToolsSnapshot,
                 promotedRowKeys = promotedRowKeys,
                 listState = listState,
@@ -1587,40 +1585,47 @@ fun ChatScreen(
                             // 它并不是"在执行某工具"，所以状态框要单独措辞——
                             // 否则会说出"正在执行 供应商限流"这种话（真机实测）。
                             val retrying = runningTool?.takeIf { it.callId.startsWith("rate-limit") }
-                            val phaseText = when {
+                            // 阶段短语（2026-10-30 端侧改版）：List 是给轮播用的——
+                            // 端侧 prefill 真的会等几十秒，单句塞不下「等待预期」的解释
+                            // （旧版 29 字被 210dp 截成"（需…"，最关键的信息恰好显示不出来）；
+                            // 改成 ≤12 字的短句轮播：状态 → 预期 → 价值，云端保持单句不变。
+                            val phasePhrases: List<String> = when {
                                 // ask_user 挂起等用户：优先级最高——工具在 RUNNING，但真正的事件是"等你回答"
-                                pendingAskNow != null -> "等你回答"
+                                pendingAskNow != null -> listOf("等你回答")
                                 // 题组同理：等的是答题进度，不是单词作答
-                                pendingQuizNow != null -> "等你答题"
+                                pendingQuizNow != null -> listOf("等你答题")
                                 retrying != null ->
-                                    (retrying.brief.ifBlank { "网络波动" }) + " · 自动重试中"
+                                    listOf((retrying.brief.ifBlank { "网络波动" }) + " · 自动重试中")
                                 runningTool != null -> {
                                     val brief = runningTool.brief.ifBlank { runningTool.name }
                                     val verb = brief.substringBefore('·').trim()
                                     val obj = brief.substringAfter('·', "").trim()
                                     val label = if (obj.isNotBlank()) "$verb $obj" else verb
                                     val no = liveToolsSnapshot.indexOf(runningTool) + 1
-                                    "正在执行 $label" + if (no > 1) "（第 $no 步）" else ""
+                                    listOf("正在执行 $label" + if (no > 1) "（第 $no 步）" else "")
                                 }
                                 // 顺序铁律：先报"此刻在产出什么"，再报"等待"。
                                 // 反过来（已完成 N 步 排在 streaming 之前）会让正文流式中
                                 // 显示"等待模型"——实测就是这么错的。
-                                streaming != null -> "正在生成回答"
-                                streamingReasoning != null -> "正在思考"
+                                streaming != null -> listOf("正在生成回答")
+                                streamingReasoning != null -> listOf("正在思考")
                                 // 无工具在跑、也无流 → 才说"已完成几步、在等模型"
                                 liveToolsSnapshot.isNotEmpty() ->
-                                    "已完成 ${liveToolsSnapshot.count { it.state == ToolRunState.DONE }} 步 · 等待模型"
+                                    listOf("已完成 ${liveToolsSnapshot.count { it.state == ToolRunState.DONE }} 步 · 等待模型")
                                 // 收尾空档：最终消息已落行、流式已清、工具已结算，running 还没翻 false。
                                 // 本轮产出过内容 → 是"在整理回答"（真机实拍：这里曾闪"正在连接模型"）；
                                 // 本轮还没产出过 → 才是真的"正在连接模型"（回合刚起跑）
                                 else -> when {
-                                    turnHadOutput -> "正在整理回答"
-                                    vm.isLocalProviderActive() ->
-                                        "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）"
-                                    else -> "正在连接模型"
+                                    turnHadOutput -> listOf("正在整理回答")
+                                    vm.isLocalProviderActive() -> listOf(
+                                        "端侧推理 · 正在理解上下文",
+                                        "可能要等数十秒，不是卡住",
+                                        "无需联网，数据不出设备"
+                                    )
+                                    else -> listOf("正在连接模型")
                                 }
                             }
-                            ThinkingIndicator(phaseText, turnStartAt)
+                            ThinkingIndicator(phasePhrases, turnStartAt)
                         }
                     }
                 }
@@ -3022,7 +3027,6 @@ private fun MessageList(
     running: Boolean,
     /** 本轮起点（0=没在跑）：页脚硬闸只封本轮新行，历史行统计不受牵连（2026-10-11）。 */
     turnStartAt: Long = 0L,
-    thinkingHint: String? = null,
     thinkingMs: Long? = null,
     liveToolsSnapshot: List<com.haoai.agent.ui.UiTool> = emptyList(),
     /** 从流式区晋升落行的 key：这些行跳过入场淡入（同帧内容已在上屏，淡入=闪一下）。 */
@@ -3698,8 +3702,7 @@ private fun MessageList(
                 StreamingItem(
                     streamingText,
                     streamingReasoning,
-                    thinkingHint,
-                    thinkingMs,
+                        thinkingMs,
                     liveTools = liveToolsSnapshot,
                     running = running,
                     onStopRun = onStopRun,
@@ -4773,16 +4776,16 @@ private fun SystemEventChip(text: String, view: SystemEventView) {
  * （shimmer 渐变）+ 已用时长计时。prefill 慢（端侧模型数十秒）时给用户持续"活着"的信号。
  */
 @Composable
-private fun ThinkingIndicator(hint: String? = null, turnStartAt: Long = 0L) {
-    val phrases = hint?.let { listOf(it) } ?: listOf(
+private fun ThinkingIndicator(phrases: List<String>? = null, turnStartAt: Long = 0L) {
+    val shown = phrases ?: listOf(
         "正在连接模型…", "正在理解上下文…", "预热推理中…", "组织回答…"
     )
     var idx by remember { mutableIntStateOf(0) }
     var elapsedMs by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(phrases) {
+    LaunchedEffect(shown) {
         while (true) {
             kotlinx.coroutines.delay(2600)
-            idx = (idx + 1) % phrases.size
+            idx = (idx + 1) % shown.size
         }
     }
     /*
@@ -4814,7 +4817,7 @@ private fun ThinkingIndicator(hint: String? = null, turnStartAt: Long = 0L) {
         )
         Spacer(Modifier.size(9.dp))
         Text(
-            text = phrases[idx % phrases.size],
+            text = shown[idx % shown.size],
             style = MaterialTheme.typography.bodyMedium.copy(
                 brush = androidx.compose.ui.graphics.Brush.linearGradient(
                     colors = listOf(base, hi, base),
@@ -4842,7 +4845,6 @@ private fun ThinkingIndicator(hint: String? = null, turnStartAt: Long = 0L) {
 private fun StreamingItem(
     streamingText: String?,
     streamingReasoning: String?,
-    thinkingHint: String? = null,
     thinkingMs: Long? = null,
     liveTools: List<com.haoai.agent.ui.UiTool> = emptyList(),
     running: Boolean = false,
