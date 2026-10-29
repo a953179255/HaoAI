@@ -40,8 +40,11 @@ val hasReleaseKeystore = keystorePropertiesFile.exists() &&
 // 与旧单文件一致（LD_LIBRARY_PATH/ADSP_LIBRARY_PATH 指向 nativeLibraryDir）。
 // 升级 = 改 LLAMA_TAG + LLAMA_SHA256 两个常量重新构建。
 // x86_64 模拟器仍用仓库内自编单文件（官方不发 x86_64 安卓包）。
-val llamaTag = "b11800"
-val llamaSha256 = "7a60d626f84b928a9e2e12703ba6e49f3d7381e188d182e7e3d730dfaba06a9c"
+// b11982（2026-10-29）：新增 LFM3 / LFM3-VL / LFM3-Audio / LFM3-Omni 架构支持
+// （上游 2026-10-27 #31252 起）。旧 b11800 加载 lfm3 GGUF 报
+// "unknown model architecture: 'lfm3'"，三档兜底全在模型加载处失败。
+val llamaTag = "b11982"
+val llamaSha256 = "7f6b330ad008011af27e30f668b9ee283aa15bd5caf08983cd8f06c5919b8ca7"
 // tar 内路径 -> jniLibs/arm64-v8a 文件名（Android 打包要求 lib*.so 前缀，
 // 所以 bin/llama-server 薄壳可执行文件改名 libllamaserver.so——沿用旧名，
 // LlamaServerController.binaryPath() 不用动）
