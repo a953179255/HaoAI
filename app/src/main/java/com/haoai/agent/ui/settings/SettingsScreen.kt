@@ -4691,7 +4691,9 @@ private fun LazyListScope.usageItems(
         var distTab by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
         val stat = periods[range]
 
-        Column {
+        // 与其他设置子页同节奏：段间距统一走 groupGap（2026-10-30 修「板块间隔
+        // 一大一小」——此前整页塞在单 item 的裸 Column 里，卡与卡几乎贴死）
+        Column(verticalArrangement = Arrangement.spacedBy(HaoDimens.groupGap)) {
             // 时段胶囊选择器（全局第一层筛选，联动全页）
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 com.haoai.agent.ui.common.LiquidTabRow(
@@ -4703,7 +4705,7 @@ private fun LazyListScope.usageItems(
             }
 
             // 英雄卡：大数字 + 环比徽标 + 输入/输出双色比例条 + 调用行
-            GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+            GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(

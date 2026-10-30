@@ -271,11 +271,18 @@ object UsageLedger {
     }
 
     private fun bucketLabel(bucket: Long, range: Int): String = when (range) {
-        0 -> "${bucket / 3600_000L % 24 * 4}"
+        // 今日桶标签=本地小时（原 `bucket/3600000 %24 *4` 是 UTC 小时再乘 4，
+        // 真机实测横轴冒出 "64 80 0 16 32 48"，峰值文案跟着错）
+        0 -> {
+            val c = java.util.Calendar.getInstance()
+            c.timeInMillis = bucket
+            "${c.get(java.util.Calendar.HOUR_OF_DAY)}时"
+        }
         1, 2 -> {
+            // 本月 30 桶每桶仅 ~21dp，"25日" 两字符会被截成 "2"——纯数字 + 卡片标题「按日」已表意
             val cal = java.util.Calendar.getInstance()
             cal.timeInMillis = bucket
-            "${cal.get(java.util.Calendar.DAY_OF_MONTH)}日"
+            "${cal.get(java.util.Calendar.DAY_OF_MONTH)}"
         }
         else -> ""
     }
