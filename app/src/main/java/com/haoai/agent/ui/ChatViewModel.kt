@@ -2823,6 +2823,19 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }
             is ToolChanged -> {
                 val tools = liveToolsOf(sid)
+                // 2026-11-01 限流重试行即用即弃：引擎把瞬态退避建模成 callId="rate-limit"
+                // 的伪工具步骤（见 AgentEngine 重试分支），退避期的提示由状态胶囊
+                // （读 RUNNING 态 →「供应商限流 · 自动重试中」）承担；恢复后若把它留成
+                // DONE 步骤，会永久悬在流式卡里——真机复现实锤：限流已恢复、第二次搜索
+                // 都跑完了，「供应商限流 ✓」还挂在消息流直到回合结束（用户报"一直在限流"）。
+                // 它不在任何 message.calls 里、永远不会落进已落行，只能在这里整个摘除。
+                if (ev.update.callId == "rate-limit" && ev.update.state != ToolRunState.RUNNING) {
+                    tools.remove("rate-limit")
+                    publishLiveTools()
+                    if (sid == viewedSid()) rebuildRows()
+                    publishSteps(sid)
+                    return
+                }
                 val prevTool = tools[ev.update.callId]
                 // m5 同源问题：这里也是逐个重列字段，漏传 diff / htmlFile / ask / askBatch / hits，
                 // 一次 ToolChanged 就把已挂上的搜索结果卡、问答卡、产物卡、变更量清空。
