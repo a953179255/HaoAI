@@ -166,59 +166,69 @@ fun SkillsScreen(
                 text = "代理在完成任务时用 skill 工具沉淀的可复用经验；系统提示词只带索引，正文按需加载。",
                 modifier = Modifier.padding(vertical = 4.dp)
             )
-            androidx.compose.foundation.layout.FlowRow(
+            // 2026-10-30 排版修正：原 FlowRow 按内容宽排，三颗按钮挤不下就换行、
+            // 两行右侧参差（用户截图反馈）。改两行满宽对称——第一行「手动添加+导入」
+            // 对半、第二行「从历史会话学习」通栏，文案全保留、文字居中。
+            Column(
                 Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
             ) {
-                // 按钮五级：一屏只留一个主操作。改前三个都是 0.85 实色，还各用一个品牌色
-                // （primary/tertiary/secondary）—— 三个按钮互相抢注意力，且第三个
-                // 「从历史会话学习」会在行内折成两行、把整行高度顶歪。
-                // FlowRow 让整颗按钮换行（不在文字中间折），配合"次级/轻量"降级。
-                val (addBg, addFg) = com.haoai.agent.ui.theme.haoButtonColors(
-                    com.haoai.agent.ui.theme.HaoButtonLevel.Primary
-                )
-                com.haoai.agent.ui.common.LiquidGlassButton(
-                    onClick = { showAdd = true },
-                    backdrop = localBackdrop,
-                    shape = RoundedCornerShape(percent = 50),
-                    surfaceColor = addBg
-                ) {
-                    androidx.compose.foundation.layout.Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-                    ) {
-                        Icon(
-                            com.haoai.agent.ui.common.HaoIcons.Add,
-                            contentDescription = null,
-                            tint = addFg,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(Modifier.padding(2.dp))
-                        Text(
-                            "手动添加技能",
-                            color = addFg,
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-                val (impBg, impFg) = com.haoai.agent.ui.theme.haoButtonColors(
-                    com.haoai.agent.ui.theme.HaoButtonLevel.Secondary
-                )
-                com.haoai.agent.ui.common.LiquidGlassButton(
-                    onClick = { showImportMenu = true },
-                    backdrop = localBackdrop,
-                    shape = RoundedCornerShape(percent = 50),
-                    enabled = !importing,
-                    surfaceColor = impBg
-                ) {
-                    Text(
-                        if (importing) "导入中…" else "导入技能",
-                        color = impFg,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
+                // 按钮五级：一屏只留一个主操作（Primary+两颗 Secondary）。
+                Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                    val (addBg, addFg) = com.haoai.agent.ui.theme.haoButtonColors(
+                        com.haoai.agent.ui.theme.HaoButtonLevel.Primary
                     )
+                    com.haoai.agent.ui.common.LiquidGlassButton(
+                        onClick = { showAdd = true },
+                        backdrop = localBackdrop,
+                        shape = RoundedCornerShape(percent = 50),
+                        surfaceColor = addBg,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        androidx.compose.foundation.layout.Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 9.dp)
+                        ) {
+                            Icon(
+                                com.haoai.agent.ui.common.HaoIcons.Add,
+                                contentDescription = null,
+                                tint = addFg,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(Modifier.padding(2.dp))
+                            Text(
+                                "手动添加技能",
+                                color = addFg,
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                    val (impBg, impFg) = com.haoai.agent.ui.theme.haoButtonColors(
+                        com.haoai.agent.ui.theme.HaoButtonLevel.Secondary
+                    )
+                    com.haoai.agent.ui.common.LiquidGlassButton(
+                        onClick = { showImportMenu = true },
+                        backdrop = localBackdrop,
+                        shape = RoundedCornerShape(percent = 50),
+                        enabled = !importing,
+                        surfaceColor = impBg,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                if (importing) "导入中…" else "导入技能",
+                                color = impFg,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
                 val (learnBg, learnFg) = com.haoai.agent.ui.theme.haoButtonColors(
                     com.haoai.agent.ui.theme.HaoButtonLevel.Secondary
@@ -227,14 +237,19 @@ fun SkillsScreen(
                     onClick = onLearnFromHistory,
                     backdrop = localBackdrop,
                     shape = RoundedCornerShape(percent = 50),
-                    surfaceColor = learnBg
+                    surfaceColor = learnBg,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        "从历史会话学习",
-                        color = learnFg,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-                    )
+                    Box(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "从历史会话学习",
+                            color = learnFg,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
             if (skills.isEmpty()) {
