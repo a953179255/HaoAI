@@ -520,7 +520,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         val tctx = com.haoai.agent.agent.tools.ToolContext(
                             backend = container.workspace.current,
                             shellDir = ws,
-                            todoStore = com.haoai.agent.agent.tools.TodoStore(ctx.filesDir),
+                            todoStore = com.haoai.agent.agent.tools.TodoStore(container.brainDir),
                             appFilesDir = ctx.filesDir,
                             appContext = ctx
                         )

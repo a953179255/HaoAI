@@ -129,4 +129,64 @@ class BrainMigratorTest {
         assertTrue(r.ok)
         assertEquals("已有", brain.resolve("MEMORY.md").readText())
     }
+
+    // ---- harvestStrandedTodos：todos 旧位补收编（2026-10-31 面板断链次生坑）----
+
+    @Test
+    fun `空brain todos不挡收编_滞留旧清单搬回且源清掉`() {
+        val brain = tmp("harvest-brain").apply {
+            resolve("todos").apply { mkdirs() } // 模拟 TodoStore 构造期 mkdirs 的空目录
+        }
+        val fd = tmp("harvest-fd").apply {
+            resolve("todos").apply { mkdirs() }
+            resolve("todos/s1.json").writeText("""[{"text":"旧清单项","status":"pending"}]""")
+            resolve("todos/s2.json").writeText("[]")
+        }
+        BrainMigrator.harvestStrandedTodos(brain, fd)
+        assertEquals("""[{"text":"旧清单项","status":"pending"}]""", brain.resolve("todos/s1.json").readText())
+        assertEquals("[]", brain.resolve("todos/s2.json").readText())
+        // 源清掉
+        assertFalse(fd.resolve("todos/s1.json").exists())
+        assertFalse(fd.resolve("todos/s2.json").exists())
+    }
+
+    @Test
+    fun `收编目标同名不覆盖_其余照搬_幂等`() {
+        val brain = tmp("harvest2-brain").apply {
+            resolve("todos").apply { mkdirs() }.resolve("s1.json").writeText("""[{"text":"新清单","status":"completed"}]""")
+        }
+        val fd = tmp("harvest2-fd").apply {
+            resolve("todos").apply { mkdirs() }
+            resolve("todos/s1.json").writeText("""[{"text":"旧残本"}]""")
+            resolve("todos/s3.json").writeText("[]")
+        }
+        BrainMigrator.harvestStrandedTodos(brain, fd)
+        // 目标赢：s1 保持新清单；s3 照搬
+        assertEquals("""[{"text":"新清单","status":"completed"}]""", brain.resolve("todos/s1.json").readText())
+        assertEquals("[]", brain.resolve("todos/s3.json").readText())
+        // s1 旧残本留源（降级为材料不误删）
+        assertTrue(fd.resolve("todos/s1.json").exists())
+        // 幂等：再跑一遍无变化
+        BrainMigrator.harvestStrandedTodos(brain, fd)
+        assertEquals("""[{"text":"新清单","status":"completed"}]""", brain.resolve("todos/s1.json").readText())
+    }
+
+    @Test
+    fun `收编跳过非json与隐藏文件_防自搬`() {
+        val brain = tmp("harvest3-brain")
+        val fd = tmp("harvest3-fd").apply {
+            resolve("todos").apply { mkdirs() }
+            resolve("todos/notes.txt").writeText("非清单")
+            resolve("todos/.tmp").writeText("隐藏")
+        }
+        BrainMigrator.harvestStrandedTodos(brain, fd)
+        assertFalse(brain.resolve("todos/notes.txt").exists())
+        assertFalse(brain.resolve("todos/.tmp").exists())
+        // 源原地
+        assertTrue(fd.resolve("todos/notes.txt").exists())
+        // 防自搬：来源恰为 brain/todos 本身时，里面的既有清单原样不动
+        brain.resolve("todos").apply { mkdirs() }.resolve("own.json").writeText("[]")
+        BrainMigrator.harvestStrandedTodos(brain, brain)
+        assertEquals("[]", brain.resolve("todos/own.json").readText())
+    }
 }

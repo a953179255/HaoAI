@@ -78,6 +78,14 @@ class AppContainer(app: Application) {
         if (!split.ok) {
             android.util.Log.w("HaoAI", "脑分家未完成(moved=${split.moved},failed=${split.failed})，下次启动重试")
         }
+        // todos 旧位补收编（幂等，不受 marker 门控）：分家时 brain/todos 若已被
+        // TodoStore 构造期 mkdirs 出来，旧清单会按"目标赢"滞留旧址——按文件粒度捞回。
+        com.haoai.agent.platform.BrainMigrator.harvestStrandedTodos(
+            brainDir,
+            (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir(),
+            workspace.defaultWorkspaceRoot(),
+            appFilesDir
+        )
     }
 
     // 长期记忆真源 = 脑根 MEMORY.md（"文件即记忆"）；v2 起固定内部私有，不随工作区移动

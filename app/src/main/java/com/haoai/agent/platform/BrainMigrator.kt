@@ -96,4 +96,32 @@ internal object BrainMigrator {
             }
         }.getOrDefault(false)
     }
+
+    /**
+     * todos 旧位补收编（每次启动幂等跑，**不受 marker 门控**）。
+     *
+     * 分家时 brain/todos 可能已被 TodoStore 构造期 mkdirs 成空目录——「目标赢」按
+     * 目录粒度判断，会把旧 todo 文件永久滞留旧址（2026-10-31 任务面板断链事故的
+     * 次生坑，模拟器实锤：10-23 的 7 份清单滞留 files/todos，brain/todos 空）。
+     * 这里按文件粒度收编：目标同名不存在才搬，复制→字节校验→删源，失败留源下次再试。
+     */
+    fun harvestStrandedTodos(brainRoot: File, vararg sources: File?) {
+        val dst = File(brainRoot, "todos")
+        for (src in sources) {
+            if (src == null) continue
+            val dir = File(src, "todos")
+            if (!dir.isDirectory) continue
+            if (runCatching { dir.canonicalFile == dst.canonicalFile }.getOrDefault(false)) continue
+            for (f in dir.listFiles().orEmpty()) {
+                if (!f.isFile || f.extension != "json" || f.name.startsWith(".")) continue
+                val t = File(dst, f.name)
+                if (t.exists()) continue // 目标赢：新清单优先，旧址残本降级为材料
+                runCatching {
+                    dst.mkdirs()
+                    f.copyTo(t, overwrite = false)
+                    if (t.length() == f.length()) f.delete() else t.delete()
+                }
+            }
+        }
+    }
 }

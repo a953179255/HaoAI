@@ -1468,7 +1468,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      */
     val taskPanel = com.haoai.agent.ui.chat.TaskPanelState()
 
-    private val todoStore = TodoStore(c.appFilesDir)
+    // v2 脑分家（e4ff418）后引擎写 brain/todos（AgentEngine.todoStore 固定 brainDir），
+    // 这里若还读 appFilesDir/todos 就永远读空——任务面板不显示（2026-10-31 用户报）。
+    // 引擎与 VM 必须同一目录：TodoStore 只做存取，路径口径统一收口到 brainDir。
+    private val todoStore = TodoStore(c.brainDir)
 
     init {
         // M19（2026-10-10）：回收站过期清扫挪后台——它要扫回收站目录逐文件读时间，

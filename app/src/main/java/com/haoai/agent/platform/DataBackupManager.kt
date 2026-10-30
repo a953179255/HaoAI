@@ -201,7 +201,8 @@ object DataBackupManager {
             }
 
             BackupScope.TASKS -> listOf(
-                File(c.appFilesDir, "todos").listByExt("json"),
+                // v2 脑分家后待办真源在 brain/todos（引擎/VM 同源）；usage 仍属应用根
+                File(c.brainDir, "todos").listByExt("json"),
                 File(c.appFilesDir, "usage").listByPrefix("usage-")
             ).flatten().map {
                 (if (it.extension == "json") "todos/" else "usage/") + it.name to it
@@ -818,7 +819,8 @@ val bySearch: Map<String, List<String>> = s.searchApiKeyCiphers.mapNotNull { (ba
                         copyTree(File(tmp, "payload/skills"), root, tx)
                 }
                 if (BackupScope.TASKS in applied) {
-                    copyTree(File(tmp, "payload/todos"), File(c.appFilesDir, "todos"), tx)
+                    // 旧备份也装在 payload/todos 下，恢复直接落脑位（与收集同源）
+                    copyTree(File(tmp, "payload/todos"), File(c.brainDir, "todos"), tx)
                     copyTree(File(tmp, "payload/usage"), File(c.appFilesDir, "usage"), tx)
                 }
                 if (BackupScope.EXTRAS in applied) {
