@@ -152,15 +152,15 @@ fun PcLinkScreen(
                             pageTier = true
                         ) {
                             Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                OutlinedTextField(
-                                    value = base, onValueChange = { base = it }, singleLine = true,
-                                    label = { Text("电脑地址") },
-                                    placeholder = { Text("如 192.168.1.20:8720") },
+                                com.haoai.agent.ui.common.CompactGlassField(
+                                    value = base, onValueChange = { base = it },
+                                    label = "电脑地址",
+                                    placeholder = "如 192.168.1.20:8720",
                                     modifier = Modifier.fillMaxWidth()
                                 )
-                                OutlinedTextField(
-                                    value = code, onValueChange = { if (it.length <= 6) code = it }, singleLine = true,
-                                    label = { Text("配对码") },
+                                com.haoai.agent.ui.common.CompactGlassField(
+                                    value = code, onValueChange = { if (it.length <= 6) code = it },
+                                    label = "配对码",
                                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                                     ),

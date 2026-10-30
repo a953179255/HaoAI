@@ -393,12 +393,13 @@ private fun ManualAddDialog(
         dismissLabel = "取消"
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            androidx.compose.material3.OutlinedTextField(
+            com.haoai.agent.ui.common.CompactGlassField(
                 value = content,
                 onValueChange = { content = it },
-                label = { Text("内容（一句话）") },
+                label = "内容",
+                placeholder = "一句话",
+                singleLine = false,
                 minLines = 2,
-                colors = com.haoai.agent.ui.common.glassFieldColors(),
                 modifier = Modifier.fillMaxWidth()
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -86,6 +86,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -1589,6 +1590,17 @@ fun CompactGlassField(
         androidx.compose.foundation.text.KeyboardActions.Default,
     /** 框下方的辅助说明文字（替代 Material supportingText） */
     supportingText: String? = null,
+    /** 错误态：描边转 error 色（2026-10-31 统一弹窗输入框时补，替代 Material isError） */
+    isError: Boolean = false,
+    /**
+     * 多行输入（2026-10-31 补）：>1 时框高随内容增长（heightIn(min=40dp)），
+     * 1 = 单行 40dp 定高。替代旧 OutlinedTextField 的 minLines/maxLines。
+     */
+    minLines: Int = 1,
+    /** 等宽字体（URL/Header/JSON 类字段，2026-10-31 统一弹窗输入框时补） */
+    mono: Boolean = false,
+    /** 内容左侧的前导元素（搜索放大镜等），在标签之前 */
+    leading: @Composable (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null
 ) {
     val interaction = androidx.compose.runtime.remember {
@@ -1596,8 +1608,11 @@ fun CompactGlassField(
     }
     val focused by interaction.collectIsFocusedAsState()
     val shape = RoundedCornerShape(11.dp)
-    val borderColor = if (focused) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f)
+    val borderColor = when {
+        isError -> MaterialTheme.colorScheme.error
+        focused -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f)
+    }
     // 降明度而非提白度：弹窗面板本身已是 0.92 白（浅色主题），再叠白色容器就是
     // 「白叠白」，边界全靠描边硬撑。改用 onBackground 叠加（浅色下=压暗、
     // 深色下=提亮），容器与面板有真实明度差；聚焦时再加深一档
@@ -1617,23 +1632,35 @@ fun CompactGlassField(
         modifier
             .fillMaxWidth()
             // 高度 40dp（原 48）：弹窗内密度优化——48dp 在三段分段布局里
-            // 单屏能看的行数太少（2026-09-11 用户反馈输入框太大空余多）
-            .height(40.dp)
+            // 单屏能看的行数太少（2026-09-11 用户反馈输入框太大空余多）；
+            // minLines>1 转多行模式：定高改最小高，随内容增长
+            .then(
+                if (minLines > 1) Modifier.heightIn(min = 40.dp)
+                else Modifier.height(40.dp)
+            )
             .background(container, shape)
-            .border(if (focused) 1.5.dp else 1.dp, borderColor, shape)
+            .border(if (focused || isError) 1.5.dp else 1.dp, borderColor, shape)
             // 起始内边距放 Row 级：label 为空时（如浏览器地址栏）内容原来从 0 起，
             // 占位字/输入字直接压在左边框上（2026-10-08 用户实测重叠）。
             // label 非空时位置不变（原 label 自带 12dp，现改由 Row 出）
-            .padding(start = 12.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(start = 12.dp, end = 4.dp)
+            // 多行输入纵向留呼吸（定高单行不需要）
+            .then(if (minLines > 1) Modifier.padding(vertical = 8.dp) else Modifier),
+        // 多行：标签顶对齐第一行文字（居中会吊在框半腰）
+        verticalAlignment = if (minLines > 1) Alignment.Top else Alignment.CenterVertically
     ) {
+        if (leading != null) {
+            leading()
+            Spacer(Modifier.width(6.dp))
+        }
         // 固定标签：始终在内容左侧，与已填值并排；label 为空 = 无标签（纯占位框）
         if (label.isNotBlank()) {
             Text(
                 label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (focused) 0.95f else 0.8f),
-                maxLines = 1
+                maxLines = 1,
+                modifier = Modifier.padding(top = if (minLines > 1) 3.dp else 0.dp)
             )
             Spacer(Modifier.width(8.dp))
         }
@@ -1650,13 +1677,16 @@ fun CompactGlassField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = singleLine,
+                minLines = minLines,
+                maxLines = if (singleLine) 1 else Int.MAX_VALUE,
                 visualTransformation = visualTransformation,
                 keyboardOptions = keyboardOptions,
                 keyboardActions = keyboardActions,
                 interactionSource = interaction,
                 modifier = Modifier.fillMaxWidth(),
                 textStyle = MaterialTheme.typography.bodySmall.copy(
-                    color = MaterialTheme.colorScheme.onBackground
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontFamily = if (mono) FontFamily.Monospace else null
                 ),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary)
             )

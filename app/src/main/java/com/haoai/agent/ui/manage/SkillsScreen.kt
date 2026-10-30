@@ -500,27 +500,25 @@ fun SkillsScreen(
             androidx.compose.foundation.layout.Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                androidx.compose.material3.OutlinedTextField(
+                com.haoai.agent.ui.common.CompactGlassField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("名称（如 deepseek-api）") },
-                    singleLine = true,
-                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                    label = "名称",
+                    placeholder = "如 deepseek-api"
                 )
-                androidx.compose.material3.OutlinedTextField(
+                com.haoai.agent.ui.common.CompactGlassField(
                     value = desc,
                     onValueChange = { desc = it },
-                    label = { Text("一句话描述（注入系统提示索引）") },
-                    singleLine = true,
-                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                    label = "一句话描述",
+                    placeholder = "注入系统提示索引"
                 )
-                androidx.compose.material3.OutlinedTextField(
+                com.haoai.agent.ui.common.CompactGlassField(
                     value = body,
                     onValueChange = { body = it },
-                    label = { Text("正文：步骤/要点（Markdown，按需加载）") },
-                    minLines = 4,
-                    maxLines = 8,
-                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                    label = "正文",
+                    placeholder = "步骤/要点（Markdown，按需加载）",
+                    singleLine = false,
+                    minLines = 4
                 )
             }
         }
@@ -607,13 +605,12 @@ fun SkillsScreen(
                 }
             }
         ) {
-            androidx.compose.material3.OutlinedTextField(
+            com.haoai.agent.ui.common.CompactGlassField(
                 value = url,
                 onValueChange = { url = it },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                label = { Text("https://…/SKILL.md 或 .zip") },
-                colors = com.haoai.agent.ui.common.glassFieldColors()
+                label = "链接",
+                placeholder = "https://…/SKILL.md 或 .zip"
             )
         }
     }
@@ -659,14 +656,13 @@ fun SkillsScreen(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-                androidx.compose.material3.OutlinedTextField(
+                com.haoai.agent.ui.common.CompactGlassField(
                     value = text,
                     onValueChange = { text = it },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 6,
-                    maxLines = 12,
-                    label = { Text("SKILL.md 全文") },
-                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                    label = "SKILL.md 全文",
+                    singleLine = false
                 )
                 if (text.isNotBlank()) {
                     Text(

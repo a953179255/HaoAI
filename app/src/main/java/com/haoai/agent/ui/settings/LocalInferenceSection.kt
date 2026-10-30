@@ -622,18 +622,16 @@ private fun LocalParamsCard(vm: SettingsViewModel, backdrop: LayerBackdrop) {
                         HaoSwitch(checked = settings.localMmap, onCheckedChange = { vm.setLocalMmap(it) })
                     }
                     ParamLabel("随机种子", if (settings.localSeed < 0) "随机" else settings.localSeed.toString())
-                    OutlinedTextField(
+                    com.haoai.agent.ui.common.CompactGlassField(
                         value = seedText,
                         onValueChange = {
                             seedText = it
                             it.toLongOrNull()?.let { v -> vm.setLocalSeed(v) }
                         },
                         modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                        label = { Text("-1 = 随机") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        textStyle = MaterialTheme.typography.labelMedium,
-                        colors = glassFieldColors()
+                        label = "种子",
+                        placeholder = "-1 = 随机",
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                     )
                 }
             }
@@ -704,10 +702,14 @@ private fun AddModelSheetContent(vm: SettingsViewModel, backdrop: LayerBackdrop)
         backdrop = backdrop
     )
     Spacer(Modifier.padding(top = 8.dp))
-    when (vm.llamaAddTab) {
-        "scan" -> ScanTab(vm)
-        "file" -> FileTab(vm, backdrop)
-        else -> DownloadTab(vm, backdrop)
+    // 2026-10-31：三个 tab 的正文此前贴边渲染（描述文字顶到屏幕左缘、右侧被裁），
+    // 统一挂 16dp 水平边距
+    Column(Modifier.padding(horizontal = 16.dp)) {
+        when (vm.llamaAddTab) {
+            "scan" -> ScanTab(vm)
+            "file" -> FileTab(vm, backdrop)
+            else -> DownloadTab(vm, backdrop)
+        }
     }
 }
 
@@ -747,7 +749,7 @@ private val CATALOG = listOf(
 private fun DownloadTab(vm: SettingsViewModel, backdrop: LayerBackdrop) {
     val dl by vm.llamaDownload.collectAsState()
     Text(
-        "推荐模型（ModelScope / HF 镜像国内直链，下载完自动校验架构入库）；也可粘贴直链。",
+        "推荐模型下载完自动校验架构；也可粘贴直链下载。",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -801,14 +803,13 @@ private fun DownloadTab(vm: SettingsViewModel, backdrop: LayerBackdrop) {
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f))
     }
     var dlUrl by remember { mutableStateOf("") }
-    OutlinedTextField(
+    com.haoai.agent.ui.common.CompactGlassField(
         value = dlUrl,
         onValueChange = { dlUrl = it },
         modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-        label = { Text("自定义 GGUF 直链") },
-        singleLine = true,
-        textStyle = MaterialTheme.typography.labelSmall,
-        colors = glassFieldColors()
+        label = "直链",
+        placeholder = "粘贴 GGUF 下载地址",
+        mono = true
     )
     LiquidPillButton(
         backdrop = backdrop, text = "下载直链",
@@ -828,7 +829,7 @@ private fun ScanTab(vm: SettingsViewModel) {
         if (vm.scannedDeviceModels == null && !vm.scanningModels) vm.scanDeviceModels()
     }
     Text(
-        "扫描 Download / Documents / models / 存储根目录（含一级子目录）。引用原文件不复制、不占双份空间；架构徽标在入库前完成校验。",
+        "扫描常用目录（含一级子目录），引用原文件不复制。",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -899,7 +900,7 @@ private fun FileTab(vm: SettingsViewModel, backdrop: LayerBackdrop) {
         uri?.let { vm.loadModelFile(ctx, it.toString()) }
     }
     Text(
-        "从文件管理器选取任意位置的 GGUF：本机存储直读引用（不复制），受限位置自动复制到应用目录。不再要求把模型挪到指定文件夹。",
+        "从文件管理器选 GGUF：直读引用不复制，受限位置自动入库。",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )

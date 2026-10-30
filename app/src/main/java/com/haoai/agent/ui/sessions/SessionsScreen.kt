@@ -166,24 +166,21 @@ fun SessionsScreen(
 
         // 搜索框常驻：两个视图共用（回收站内可搜索后精准彻底删除）
         Box {
-        OutlinedTextField(
+        // 2026-10-31 统一紧凑输入框（40dp，放大镜前置，圆角 11 与全 App 弹窗一致）
+        com.haoai.agent.ui.common.CompactGlassField(
             value = query,
             onValueChange = { query = it },
-            placeholder = {
-                Text(
-                    "搜索标题与消息内容",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
-                )
-            },
-            leadingIcon = {
+            label = "",
+            placeholder = "搜索标题与消息内容",
+            leading = {
                 Icon(
                     Icons.Filled.Search,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    modifier = Modifier.size(17.dp)
                 )
             },
-            trailingIcon = {
+            trailing = {
                 if (searching) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
@@ -200,9 +197,6 @@ fun SessionsScreen(
                     }
                 }
             },
-            singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            colors = glassFieldColors(),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)

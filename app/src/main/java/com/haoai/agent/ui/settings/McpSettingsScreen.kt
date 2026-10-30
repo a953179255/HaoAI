@@ -520,18 +520,18 @@ private fun McpEditView(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    androidx.compose.material3.OutlinedTextField(
+                                    com.haoai.agent.ui.common.CompactGlassField(
                                         value = headerKeys[i],
                                         onValueChange = { v ->
                                             headerKeys = headerKeys.toMutableList().also { it[i] = v }
                                         },
                                         modifier = Modifier.weight(1f),
-                                        singleLine = true,
-                                        placeholder = { Text("Header", style = MaterialTheme.typography.bodySmall) },
-                                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                                        label = "",
+                                        placeholder = "Header",
+                                        mono = true
                                     )
                                     Text(":", style = MaterialTheme.typography.titleMedium)
-                                    androidx.compose.material3.OutlinedTextField(
+                                    com.haoai.agent.ui.common.CompactGlassField(
                                         value = headerValues.getOrElse(i) { "" },
                                         onValueChange = { v ->
                                             headerValues = headerValues.toMutableList().also {
@@ -539,9 +539,9 @@ private fun McpEditView(
                                             }
                                         },
                                         modifier = Modifier.weight(1.4f),
-                                        singleLine = true,
-                                        placeholder = { Text("值", style = MaterialTheme.typography.bodySmall) },
-                                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                        label = "",
+                                        placeholder = "值",
+                                        mono = true,
                                         // header 值常含凭据：默认掩码，节级开关临时显示（与 Bearer Token 同待遇）
                                         visualTransformation = if (showHeaderValues) androidx.compose.ui.text.input.VisualTransformation.None
                                         else PasswordVisualTransformation()
@@ -735,18 +735,14 @@ private fun LabeledField(
     mono: Boolean = false,
     visual: androidx.compose.ui.text.input.VisualTransformation = androidx.compose.ui.text.input.VisualTransformation.None
 ) {
-    Column {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(4.dp))
-        androidx.compose.material3.OutlinedTextField(
-            value = value,
-            onValueChange = onChange,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            placeholder = { Text(placeholder, style = MaterialTheme.typography.bodySmall) },
-            textStyle = if (mono) MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
-            else MaterialTheme.typography.bodyMedium,
-            visualTransformation = visual
-        )
-    }
+    // 2026-10-31 统一弹窗输入框：紧凑 40dp 款（标签并排框内，与供应商向导一致）
+    com.haoai.agent.ui.common.CompactGlassField(
+        value = value,
+        onValueChange = onChange,
+        modifier = Modifier.fillMaxWidth(),
+        label = label,
+        placeholder = placeholder,
+        mono = mono,
+        visualTransformation = visual
+    )
 }

@@ -1100,14 +1100,13 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(10.dp))
-                androidx.compose.material3.OutlinedTextField(
+                com.haoai.agent.ui.common.CompactGlassField(
                     value = linuxState.urlDraft,
                     onValueChange = { linuxState.urlDraft = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("下载 URL（默认官方源，可换镜像）") },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                    label = "下载 URL",
+                    placeholder = "默认官方源，可换镜像",
+                    mono = true
                 )
             }
         }
@@ -3266,14 +3265,14 @@ private fun LazyListScope.generalItems(
                         kotlinx.coroutines.delay(600)
                         vm.setCustomPrompt(promptLocal)
                     }
-                    OutlinedTextField(
+                    com.haoai.agent.ui.common.CompactGlassField(
                         value = promptLocal,
                         onValueChange = { promptLocal = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("附加到系统提示末尾的个人偏好…") },
-                        minLines = 2,
-                        maxLines = 6,
-                        colors = com.haoai.agent.ui.common.glassFieldColors()
+                        placeholder = "附加到系统提示末尾的个人偏好…",
+                        label = "",
+                        singleLine = false,
+                        minLines = 2
                     )
                 }
             }
@@ -4171,12 +4170,12 @@ private fun LazyListScope.searchItems(
         GlassGroup(backdrop) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
                 Text("搜索词", style = MaterialTheme.typography.labelMedium)
-                OutlinedTextField(
+                com.haoai.agent.ui.common.CompactGlassField(
                     value = query,
                     onValueChange = { query = it },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                    label = "",
+                    placeholder = "输入搜索词测试"
                 )
                 Row(
                     Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -4462,20 +4461,19 @@ private fun SearchCatalogPage(
     Column {
         GlassGroup(backdrop) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                OutlinedTextField(
+                com.haoai.agent.ui.common.CompactGlassField(
                     value = q,
                     onValueChange = { q = it },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    placeholder = { Text("搜后端名称，如 智谱 / SearXNG") },
-                    leadingIcon = {
+                    label = "",
+                    placeholder = "搜后端名称，如 智谱 / SearXNG",
+                    leading = {
                         Icon(
                             Icons.Filled.Search, contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp)
                         )
-                    },
-                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                    }
                 )
                 Text(
                     "点一家即添加并设为当前主后端；同一时间只生效一家，其余已添加的只是备选。",
@@ -4582,21 +4580,20 @@ private fun SearchKeyField(
     }
     Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium)
-        OutlinedTextField(
+        com.haoai.agent.ui.common.CompactGlassField(
             value = draft,
             onValueChange = { draft = it.trim() },
             modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            placeholder = { Text(if (has) "已保存，粘贴新值即覆盖" else placeholder) },
-            trailingIcon = {
+            label = "",
+            placeholder = if (has) "已保存，粘贴新值即覆盖" else placeholder,
+            trailing = {
                 if (has && draft.isBlank()) {
                     TextButton(onClick = { vm.setSearchKey(backendId, "") }) {
                         Text("清除", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             },
-            visualTransformation = PasswordVisualTransformation(),
-            colors = com.haoai.agent.ui.common.glassFieldColors()
+            visualTransformation = PasswordVisualTransformation()
         )
         // 掩码走 remember（backendId+has 不变即复用）：解密是 AndroidKeyStore 的
         // Cipher.init+doFinal，原先每次重组（本字段每键击/任何同重组域状态变化）都重做
@@ -4629,15 +4626,14 @@ private fun SearchOptionField(
     }
     Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium)
-        OutlinedTextField(
+        com.haoai.agent.ui.common.CompactGlassField(
             value = draft,
             onValueChange = { draft = it },
             modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            placeholder = { Text(placeholder) },
+            label = "",
+            placeholder = placeholder,
             visualTransformation = if (password) PasswordVisualTransformation()
-            else VisualTransformation.None,
-            colors = com.haoai.agent.ui.common.glassFieldColors()
+            else VisualTransformation.None
         )
         if (help != null) {
             Text(
@@ -4967,14 +4963,13 @@ private fun LazyListScope.usageItems(
                                 )
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                OutlinedTextField(
+                                com.haoai.agent.ui.common.CompactGlassField(
                                     value = budgetText,
                                     onValueChange = { t -> budgetText = t.filter { ch -> ch.isDigit() }.take(5) },
                                     modifier = Modifier.width(126.dp),
-                                    singleLine = true,
-                                    placeholder = { Text("不限") },
-                                    trailingIcon = { Text("K/日", style = MaterialTheme.typography.labelSmall) },
-                                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                                    label = "",
+                                    placeholder = "不限",
+                                    trailing = { Text("K/日", style = MaterialTheme.typography.labelSmall) }
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Text(
@@ -7642,12 +7637,11 @@ private fun SwitchParamField(    label: String,
         )
         Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
         if (enabled) {
-            OutlinedTextField(
+            com.haoai.agent.ui.common.CompactGlassField(
                 value = value,
                 onValueChange = { v -> onValue(v.filter { !it.isLetter() }.take(8)) },
-                singleLine = true,
-                modifier = Modifier.width(90.dp),
-                textStyle = MaterialTheme.typography.labelSmall
+                label = "",
+                modifier = Modifier.width(90.dp)
             )
         }
     }

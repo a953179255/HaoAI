@@ -476,15 +476,18 @@ private fun EditWorkflowDialog(
             )
         }
         if (advanced) {
-            OutlinedTextField(
+            com.haoai.agent.ui.common.CompactGlassField(
                 value = json,
                 onValueChange = { json = it },
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 360.dp),
-                textStyle = MaterialTheme.typography.labelSmall,
+                label = "",
                 isError = err != null,
-                supportingText = { Text(err ?: "完整 JSON 定义；pendingConfirm=false 且 enabled=true 即生效") }
+                supportingText = err ?: "完整 JSON 定义；pendingConfirm=false 且 enabled=true 即生效",
+                singleLine = false,
+                minLines = 2,
+                mono = true
             )
         } else {
             Column(
@@ -492,11 +495,10 @@ private fun EditWorkflowDialog(
                     .heightIn(max = 380.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                OutlinedTextField(
+                com.haoai.agent.ui.common.CompactGlassField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("名称") },
-                    singleLine = true,
+                    label = "名称",
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.size(8.dp))
@@ -512,19 +514,13 @@ private fun EditWorkflowDialog(
                     backdrop = backdrop
                 )
                 if (TRIGGER_TYPES[triggerType] == "schedule" || TRIGGER_TYPES[triggerType] == "notification") {
-                    OutlinedTextField(
+                    com.haoai.agent.ui.common.CompactGlassField(
                         value = triggerConfig,
                         onValueChange = { triggerConfig = it },
-                        label = { Text(if (TRIGGER_TYPES[triggerType] == "schedule") "定时规格" else "通知关键词") },
-                        singleLine = true,
-                        supportingText = {
-                            Text(
-                                if (TRIGGER_TYPES[triggerType] == "schedule")
-                                    "every:30m / every:2h / every:1d / daily:09:30 / hourly"
-                                else "捕获到含关键词的通知时触发（需通知使用权）",
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        },
+                        label = if (TRIGGER_TYPES[triggerType] == "schedule") "定时规格" else "通知关键词",
+                        supportingText = if (TRIGGER_TYPES[triggerType] == "schedule")
+                            "every:30m / every:2h / every:1d / daily:09:30 / hourly"
+                        else "捕获到含关键词的通知时触发（需通知使用权）",
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -642,40 +638,41 @@ private fun StepEditorCard(
             backdrop = backdrop
         )
         if (step.type == "tool") {
-            OutlinedTextField(
+            com.haoai.agent.ui.common.CompactGlassField(
                 value = step.tool,
                 onValueChange = { onChange(step.copy(tool = it.trim().take(60))) },
-                label = { Text("工具名") },
-                singleLine = true,
+                label = "工具名",
+                mono = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            OutlinedTextField(
+            com.haoai.agent.ui.common.CompactGlassField(
                 value = step.args,
                 onValueChange = { onChange(step.copy(args = it.take(4000))) },
-                label = { Text("参数 JSON") },
-                textStyle = MaterialTheme.typography.labelSmall,
-                supportingText = { Text("支持 {{prev}}/{{stepN}}，注入时自动 JSON 转义", style = MaterialTheme.typography.labelSmall) },
+                label = "参数 JSON",
+                supportingText = "支持 {{prev}}/{{stepN}}，注入时自动 JSON 转义",
+                singleLine = false,
+                minLines = 2,
+                mono = true,
                 modifier = Modifier.fillMaxWidth()
             )
         } else {
-            OutlinedTextField(
+            com.haoai.agent.ui.common.CompactGlassField(
                 value = step.text,
                 onValueChange = { onChange(step.copy(text = it.take(2000))) },
-                label = { Text("交给代理的指令") },
-                textStyle = MaterialTheme.typography.bodySmall,
+                label = "指令",
+                placeholder = "交给代理的指令",
+                supportingText = "支持 {{prev}}=上一步输出、{{step1}}=第 1 步输出",
+                singleLine = false,
                 minLines = 2,
-                maxLines = 6,
-                supportingText = { Text("支持 {{prev}}=上一步输出、{{step1}}=第 1 步输出", style = MaterialTheme.typography.labelSmall) },
                 modifier = Modifier.fillMaxWidth()
             )
         }
-        OutlinedTextField(
+        com.haoai.agent.ui.common.CompactGlassField(
             value = step.condition,
             onValueChange = { onChange(step.copy(condition = it.take(200))) },
-            label = { Text("条件（可选）") },
-            singleLine = true,
-            placeholder = { Text("prev_contains:完成") },
-            supportingText = { Text("prev_contains:X / prev_not_contains:X，不满足则跳过此步", style = MaterialTheme.typography.labelSmall) },
+            label = "条件",
+            placeholder = "prev_contains:完成",
+            supportingText = "prev_contains:X / prev_not_contains:X，不满足则跳过此步",
             modifier = Modifier.fillMaxWidth()
         )
         Row(
