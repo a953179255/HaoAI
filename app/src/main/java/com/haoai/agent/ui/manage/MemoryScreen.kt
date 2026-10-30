@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -138,7 +140,10 @@ fun MemoryScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 item(key = "dashboard") {
-                    MemoryDashboardCard(vm, fmt, backdrop, onDeleteRequest = { pendingDelete = it })
+                    // 2026-10-31：三卡采样源从主层 backdrop 换成本页壁纸宿主 localBackdrop——
+                    // 主层在本页采样不到有效内容，卡片磨砂整条失效（壁纸锐利穿透、文字不清，
+                    // 用户对照技能库点名）；技能库同结构页全部采样 localBackdrop，行为对齐
+                    MemoryDashboardCard(vm, fmt, localBackdrop, onDeleteRequest = { pendingDelete = it })
                 }
                 if (vm.days.isNotEmpty()) {
                     item(key = "journal_header") {
@@ -157,7 +162,7 @@ fun MemoryScreen(
                         }
                     }
                     items(vm.days, key = { "j_${it.date}" }) { day ->
-                        JournalDayCard(day, backdrop)
+                        JournalDayCard(day, localBackdrop)
                     }
                 }
                 item(key = "lt_header") {
@@ -167,7 +172,7 @@ fun MemoryScreen(
                     )
                 }
                 items(vm.items, key = { it.id }) { m ->
-                    MemoryCard(m, fmt, onDeleteRequest = { pendingDelete = it }, backdrop)
+                    MemoryCard(m, fmt, onDeleteRequest = { pendingDelete = it }, localBackdrop)
                 }
             }
         }
@@ -181,25 +186,59 @@ fun MemoryScreen(
                 IconButton(onClick = { showAdd = true }) {
                     Icon(Icons.Filled.Add, contentDescription = "手动添加记忆")
                 }
-                IconButton(onClick = { exportLauncher.launch(exportName) }) {
-                    Icon(Icons.Filled.Archive, contentDescription = "导出记忆备份（zip）")
-                }
-                IconButton(onClick = {
-                    if (!vm.consolidating) vm.consolidate { msg = it }
-                }) {
-                    Icon(Icons.Filled.AutoFixHigh, contentDescription = "固化记忆（AI自动整理重要信息）")
-                }
-                if (vm.items.isNotEmpty()) {
-                    IconButton(onClick = {
-                        // M21：tidy 改后台执行，结果回调更新提示（原同步返回会卡主线程）
-                        vm.tidy { n ->
-                            msg = if (n > 0) "已整理：合并/清理 $n 条冗余记忆" else "很干净，无需整理"
-                        }
-                    }) {
-                        Icon(Icons.Filled.Build, contentDescription = "整理冗余记忆")
+                // 2026-10-31：固化/整理/导出/清空四个动作原是四个裸图标（用户看不懂各自
+                // 干什么），收进带文字的「更多」菜单；＋ 是通用符号保留在栏上
+                var moreOpen by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { moreOpen = true }) {
+                        Icon(Icons.Filled.MoreHoriz, contentDescription = "更多操作：固化/整理/导出/清空")
                     }
-                    IconButton(onClick = { confirmClear = true }) {
-                        Icon(Icons.Filled.DeleteSweep, contentDescription = "清空所有长期记忆")
+                    androidx.compose.material3.DropdownMenu(
+                        expanded = moreOpen,
+                        onDismissRequest = { moreOpen = false }
+                    ) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Filled.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            text = { Column {
+                                Text("固化记忆")
+                                Text("AI 自动整理重要条目，晋升长期记忆", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } },
+                            onClick = { moreOpen = false; if (!vm.consolidating) vm.consolidate { msg = it } }
+                        )
+                        if (vm.items.isNotEmpty()) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Filled.Build, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                text = { Column {
+                                    Text("整理冗余")
+                                    Text("合并/清理重复过期的记忆条目", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } },
+                                onClick = {
+                                    moreOpen = false
+                                    // M21：tidy 改后台执行，结果回调更新提示（原同步返回会卡主线程）
+                                    vm.tidy { n ->
+                                        msg = if (n > 0) "已整理：合并/清理 $n 条冗余记忆" else "很干净，无需整理"
+                                    }
+                                }
+                            )
+                        }
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Filled.Archive, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            text = { Column {
+                                Text("导出备份")
+                                Text("全部记忆打包为 zip 保存", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } },
+                            onClick = { moreOpen = false; exportLauncher.launch(exportName) }
+                        )
+                        if (vm.items.isNotEmpty()) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Filled.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp)) },
+                                text = { Column {
+                                    Text("清空全部记忆", color = MaterialTheme.colorScheme.error)
+                                    Text("删除所有长期记忆，不可恢复", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } },
+                                onClick = { moreOpen = false; confirmClear = true }
+                            )
+                        }
                     }
                 }
             }
