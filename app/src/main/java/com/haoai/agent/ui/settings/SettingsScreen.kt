@@ -2218,19 +2218,23 @@ private fun LazyListScope.memoryItems(
     item { SectionTitle("记忆管理模型") }
 item {
         GlassGroup(backdrop) {
+            // 2026-11-01：行补纵向边距（原标题字与组面板顶边几乎重合，用户实锤）；
+            // 端侧/云端用分隔线+组内小标题区分，token 消耗说明只写一次
+            // （原每个云端模型下都重复一行「云端服务 · 整理时消耗该服务 token」）
+            val cloudProviders = settings.providers.filter { it.id != "local" }
             Row(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .clickable { vm.setDreamProvider("local") }
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 RadioButton(selected = settings.dreamProviderId == "local", onClick = { vm.setDreamProvider("local") })
                 Column(Modifier.padding(start = 4.dp).weight(1f)) {
-                    Text("端侧小模型（推荐，零 token 消耗）", style = MaterialTheme.typography.bodySmall)
+                    Text("端侧小模型", style = MaterialTheme.typography.bodySmall)
                     Text(
-                        "llama.cpp 本地运行 · ${vm.llamaModelFile() ?: "未下载"}",
+                        "推荐，零 token 消耗 · llama.cpp 本地运行 · ${vm.llamaModelFile() ?: "未下载"}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2242,24 +2246,30 @@ item {
                 }
                 TextButton(onClick = onPickDreamModel) { Text("选择", style = MaterialTheme.typography.labelMedium) }
             }
-            settings.providers.filter { it.id != "local" }.forEach { p ->
+            if (cloudProviders.isNotEmpty()) {
+                HaoDivider()
+                Text(
+                    "云端服务 · 整理时消耗对应服务的 token",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+            cloudProviders.forEach { p ->
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .clickable { vm.setDreamProvider(p.id) }
-                        .padding(horizontal = 8.dp),
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     RadioButton(selected = settings.dreamProviderId == p.id, onClick = { vm.setDreamProvider(p.id) })
-                    Column(Modifier.padding(start = 4.dp)) {
-                        Text("${p.name} · ${p.model}", style = MaterialTheme.typography.bodySmall)
-                        Text(
-                            "云端服务 · 整理时消耗该服务 token",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        "${p.name} · ${p.model}",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
                 }
             }
         }

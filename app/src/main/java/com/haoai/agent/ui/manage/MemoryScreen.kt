@@ -486,8 +486,9 @@ private fun ManualAddDialog(
                 onValueChange = { content = it },
                 label = "内容",
                 placeholder = "一句话",
+                // 2026-11-01 行业做法：空态=40dp 单行高与其他输入框一致，打字多行才长高
+                // （原 minLines=2 空态两行高、文字顶格显偏上）
                 singleLine = false,
-                minLines = 2,
                 modifier = Modifier.fillMaxWidth()
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -1635,7 +1635,9 @@ fun CompactGlassField(
             // 单屏能看的行数太少（2026-09-11 用户反馈输入框太大空余多）；
             // minLines>1 转多行模式：定高改最小高，随内容增长
             .then(
-                if (minLines > 1) Modifier.heightIn(min = 40.dp)
+                // auto-grow 模式（singleLine=false）：最小 40dp 随内容长高——
+                // 空态与单行框完全同高同位（行业做法：聊天输入框/自增长文本域）
+                if (!singleLine) Modifier.heightIn(min = 40.dp)
                 else Modifier.height(40.dp)
             )
             .background(container, shape)
@@ -1645,11 +1647,11 @@ fun CompactGlassField(
             // label 非空时位置不变（原 label 自带 12dp，现改由 Row 出）
             .padding(start = 12.dp, end = 4.dp)
             // 多行输入纵向留呼吸（定高单行不需要）
-            .then(if (minLines > 1) Modifier.padding(vertical = 8.dp) else Modifier),
-        // 多行：标签顶对齐第一行文字（居中会吊在框半腰）；**未聚焦空态例外**——
-        // 多行框空着时 minLines 撑出下方空白，顶对齐读起来像挂偏（用户实锤
-        // 「内容 一句话」偏上），空态整体居中；聚焦后回顶对齐与光标一致
-        verticalAlignment = if (minLines > 1 && (value.isNotEmpty() || focused)) Alignment.Top else Alignment.CenterVertically
+            .then(if (!singleLine) Modifier.padding(vertical = 8.dp) else Modifier),
+        // 2026-11-01 行业做法定稿：占位文字**恒左对齐**、聚焦不跳动（原聚焦翻转
+        // 对齐会肉眼跳一下）；空态整体垂直居中（修「内容 一句话」偏上），只在首字符
+        // 进入时从居中切顶对齐——此刻占位文字已消失，只剩标签小幅归位
+        verticalAlignment = if (!singleLine && value.isNotEmpty()) Alignment.Top else Alignment.CenterVertically
     ) {
         if (leading != null) {
             leading()
@@ -1662,14 +1664,15 @@ fun CompactGlassField(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (focused) 0.95f else 0.8f),
                 maxLines = 1,
-                modifier = Modifier.padding(top = if (minLines > 1 && (value.isNotEmpty() || focused)) 3.dp else 0.dp)
+                modifier = Modifier.padding(top = if (!singleLine && value.isNotEmpty()) 3.dp else 0.dp)
             )
             Spacer(Modifier.width(8.dp))
         }
         Box(
             Modifier.weight(1f),
-            // 空态占位文字在 minLines 撑出的框内居中（同上）；聚焦回顶部陪光标
-            contentAlignment = if (minLines > 1 && value.isEmpty() && !focused) Alignment.Center else Alignment.TopStart
+            // 空态占位文字垂直居中（**水平恒靠左**——Alignment.Center 会连水平一起
+            // 居中，用户实锤错误）
+            contentAlignment = if (!singleLine && value.isEmpty()) Alignment.CenterStart else Alignment.TopStart
         ) {
             if (value.isEmpty() && placeholder != null) {
                 Text(
