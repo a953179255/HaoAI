@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,11 +42,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -55,6 +59,7 @@ import com.haoai.agent.agent.memory.Memory
 import com.haoai.agent.agent.memory.MemoryConsolidation
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
+import com.haoai.agent.ui.common.GlassPopup
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -187,57 +192,62 @@ fun MemoryScreen(
                     Icon(Icons.Filled.Add, contentDescription = "手动添加记忆")
                 }
                 // 2026-10-31：固化/整理/导出/清空四个动作原是四个裸图标（用户看不懂各自
-                // 干什么），收进带文字的「更多」菜单；＋ 是通用符号保留在栏上
+                // 干什么），收进带文字的「更多」菜单；＋ 是通用符号保留在栏上。
+                // 菜单壳用 GlassPopup 液态玻璃（2026-11-01 用户反馈 Material DropdownMenu
+                // 白底直角与全 App 玻璃语言不一致）
                 var moreOpen by remember { mutableStateOf(false) }
                 Box {
                     IconButton(onClick = { moreOpen = true }) {
                         Icon(Icons.Filled.MoreHoriz, contentDescription = "更多操作：固化/整理/导出/清空")
                     }
-                    androidx.compose.material3.DropdownMenu(
-                        expanded = moreOpen,
-                        onDismissRequest = { moreOpen = false }
-                    ) {
-                        androidx.compose.material3.DropdownMenuItem(
-                            leadingIcon = { Icon(Icons.Filled.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                            text = { Column {
-                                Text("固化记忆")
-                                Text("AI 自动整理重要条目，晋升长期记忆", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            } },
-                            onClick = { moreOpen = false; if (!vm.consolidating) vm.consolidate { msg = it } }
-                        )
-                        if (vm.items.isNotEmpty()) {
-                            androidx.compose.material3.DropdownMenuItem(
-                                leadingIcon = { Icon(Icons.Filled.Build, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                                text = { Column {
-                                    Text("整理冗余")
-                                    Text("合并/清理重复过期的记忆条目", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                } },
-                                onClick = {
-                                    moreOpen = false
-                                    // M21：tidy 改后台执行，结果回调更新提示（原同步返回会卡主线程）
-                                    vm.tidy { n ->
-                                        msg = if (n > 0) "已整理：合并/清理 $n 条冗余记忆" else "很干净，无需整理"
+                    if (moreOpen) {
+                        GlassPopup(
+                            backdrop = localBackdrop,
+                            onDismiss = { moreOpen = false },
+                            // 锚点=⋯按钮，菜单自其右下展开（顶部对齐右缘，向下生长）
+                            alignment = Alignment.TopEnd
+                        ) { close ->
+                            Column(
+                                Modifier.width(248.dp).padding(horizontal = 8.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                MemoryMenuRow(
+                                    Icons.Filled.AutoFixHigh, "固化记忆",
+                                    "AI 自动整理重要条目，晋升长期记忆"
+                                ) {
+                                    close()
+                                    if (!vm.consolidating) vm.consolidate { msg = it }
+                                }
+                                if (vm.items.isNotEmpty()) {
+                                    MemoryMenuRow(
+                                        Icons.Filled.Build, "整理冗余",
+                                        "合并/清理重复过期的记忆条目"
+                                    ) {
+                                        close()
+                                        // M21：tidy 改后台执行，结果回调更新提示（原同步返回会卡主线程）
+                                        vm.tidy { n ->
+                                            msg = if (n > 0) "已整理：合并/清理 $n 条冗余记忆" else "很干净，无需整理"
+                                        }
                                     }
                                 }
-                            )
-                        }
-                        androidx.compose.material3.DropdownMenuItem(
-                            leadingIcon = { Icon(Icons.Filled.Archive, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                            text = { Column {
-                                Text("导出备份")
-                                Text("全部记忆打包为 zip 保存", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            } },
-                            onClick = { moreOpen = false; exportLauncher.launch(exportName) }
-                        )
-                        if (vm.items.isNotEmpty()) {
-                            androidx.compose.material3.DropdownMenuItem(
-                                leadingIcon = { Icon(Icons.Filled.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp)) },
-                                text = { Column {
-                                    Text("清空全部记忆", color = MaterialTheme.colorScheme.error)
-                                    Text("删除所有长期记忆，不可恢复", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                } },
-                                onClick = { moreOpen = false; confirmClear = true }
-                            )
+                                MemoryMenuRow(
+                                    Icons.Filled.Archive, "导出备份",
+                                    "全部记忆打包为 zip 保存"
+                                ) {
+                                    close()
+                                    exportLauncher.launch(exportName)
+                                }
+                                if (vm.items.isNotEmpty()) {
+                                    MemoryMenuRow(
+                                        Icons.Filled.DeleteSweep, "清空全部记忆",
+                                        "删除所有长期记忆，不可恢复",
+                                        danger = true
+                                    ) {
+                                        close()
+                                        confirmClear = true
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -320,6 +330,45 @@ fun MemoryScreen(
             dismissLabel = "取消"
         ) {
             Text("确认删除此条记忆？此操作不可恢复。")
+        }
+    }
+}
+
+/**
+ * 记忆页「⋯」玻璃菜单的行（2026-11-01）：图标+主标题+一行副说明；
+ * danger=红色调（清空类）。涟漪先 clip 圆角（全 App 按压约定）。
+ */
+@Composable
+private fun MemoryMenuRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    sub: String,
+    danger: Boolean = false,
+    onClick: () -> Unit
+) {
+    val tone = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = tone, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                sub,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

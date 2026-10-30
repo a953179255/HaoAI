@@ -1646,8 +1646,10 @@ fun CompactGlassField(
             .padding(start = 12.dp, end = 4.dp)
             // 多行输入纵向留呼吸（定高单行不需要）
             .then(if (minLines > 1) Modifier.padding(vertical = 8.dp) else Modifier),
-        // 多行：标签顶对齐第一行文字（居中会吊在框半腰）
-        verticalAlignment = if (minLines > 1) Alignment.Top else Alignment.CenterVertically
+        // 多行：标签顶对齐第一行文字（居中会吊在框半腰）；**未聚焦空态例外**——
+        // 多行框空着时 minLines 撑出下方空白，顶对齐读起来像挂偏（用户实锤
+        // 「内容 一句话」偏上），空态整体居中；聚焦后回顶对齐与光标一致
+        verticalAlignment = if (minLines > 1 && (value.isNotEmpty() || focused)) Alignment.Top else Alignment.CenterVertically
     ) {
         if (leading != null) {
             leading()
@@ -1660,11 +1662,15 @@ fun CompactGlassField(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (focused) 0.95f else 0.8f),
                 maxLines = 1,
-                modifier = Modifier.padding(top = if (minLines > 1) 3.dp else 0.dp)
+                modifier = Modifier.padding(top = if (minLines > 1 && (value.isNotEmpty() || focused)) 3.dp else 0.dp)
             )
             Spacer(Modifier.width(8.dp))
         }
-        Box(Modifier.weight(1f)) {
+        Box(
+            Modifier.weight(1f),
+            // 空态占位文字在 minLines 撑出的框内居中（同上）；聚焦回顶部陪光标
+            contentAlignment = if (minLines > 1 && value.isEmpty() && !focused) Alignment.Center else Alignment.TopStart
+        ) {
             if (value.isEmpty() && placeholder != null) {
                 Text(
                     placeholder,
