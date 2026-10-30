@@ -6968,14 +6968,17 @@ private fun MessageActionPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp)
+                // 2026-10-31：先让位手势条再留浮层边距——原固定 24dp 底边距小于
+                // 手势区高度，卡片底缘被系统小横条压线
+                .navigationBarsPadding()
                 .padding(bottom = 24.dp)
                 .clickable(interactionSource = null, indication = null) {},
             // 2026-10-08：圆角/白雾/模糊全部接入全局调参（滑杆标着"影响：弹层"，
-            // 这块面板一直没接，用户实测发现）。白雾按弹层锚点 0.92 等比映射——
-            // 滑杆停默认值时仍是原来的 0.92 不透明（压在消息流上可读性优先），
-            // 调低才有穿透变化（下限 0.552 防正文穿字）
+            // 这块面板一直没接，用户实测发现）。2026-10-31 白雾改**固定 0.92**：
+            // 弹层是固定窗口可读性优先，不再吃「聊天卡片白雾」滑杆（滑杆拉低曾把
+            // 本面板拖到 0.55 穿字）
             radius = com.haoai.agent.ui.theme.GlassTuning.corner.dp,
-            surfaceAlpha = com.haoai.agent.ui.theme.GlassTuning.popupVeil(0.92f),
+            surfaceAlpha = 0.92f,
             blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
             // 统一玻璃配方（2026-10-08）：原不传 lens → 继承 radius24×默认倍数2=位移48
             // （比输入框原状还重），折射早已并入全局

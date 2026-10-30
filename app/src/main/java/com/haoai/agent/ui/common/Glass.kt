@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
@@ -1134,7 +1135,7 @@ fun GlassPopup(
     modifier: Modifier = Modifier,
     alignment: Alignment = Alignment.BottomEnd,
     offset: androidx.compose.ui.unit.IntOffset = androidx.compose.ui.unit.IntOffset.Zero,
-    surfaceAlpha: Float = 0.52f,
+    surfaceAlpha: Float = 0.85f,
     radius: Dp = 20.dp,
     content: @Composable (close: () -> Unit) -> Unit
 ) {
@@ -1170,9 +1171,9 @@ fun GlassPopup(
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
             },
             radius = radius,
-            // 白雾/模糊 2026-10-08 接入全局调参（滑杆标了"影响：弹层"却一直没接，
-            // 用户实测发现）：白雾按档位锚点等比映射，停默认值时外观零变化
-            surfaceAlpha = com.haoai.agent.ui.theme.GlassTuning.popupVeil(surfaceAlpha),
+            // 2026-10-31 弹层白雾与全局滑杆解耦：固定档（用户裁决——弹层是固定窗口，
+            // 可读性优先，不再吃「聊天卡片白雾」滑杆；滑杆拉低曾把菜单拖到 0.31 穿字）
+            surfaceAlpha = surfaceAlpha,
             blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
             // 统一玻璃配方（2026-10-08）：原继承 lensRadius=radius（圆角越大折射越重），
             // 现折射/模糊/色差走全局调参
@@ -1190,6 +1191,8 @@ fun GlassPopup(
  * 液态玻璃底部弹层（v8 思维链弹层通用壳，2026-09-15）：
  * 必须在 **appLayer 之外的主窗口组合树内**渲染（独立 Popup/Dialog 窗口采样不到
  * backdrop，只能死灰/磨砂）。行为对齐 ModalBottomSheet：
+ * - 表面白雾**固定 0.92**（2026-10-31 与全局白雾滑杆解耦：弹层是固定窗口，
+ *   可读性优先——滑杆耦合曾把弹层拖到 0.43 穿字）；面板整体让位导航栏手势条；
  * - 进场：自下而上滑入（240ms）+ 遮罩渐显；
  * - 顶部横杠可拖：跟手下滑，超阈值或快速甩动松手 → 滑出收起（退出动画播完才回调
  *   onDismiss）；未达阈值回弹；
@@ -1201,7 +1204,7 @@ fun GlassBottomSheet(
     backdrop: LayerBackdrop,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
-    surfaceAlpha: Float = 0.72f,
+    surfaceAlpha: Float = 0.92f,
     /** 默认吃全局磨砂滑杆（2026-10-08 接入，原硬编码 24dp 调参页改了没反应） */
     blurRadius: Dp = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
     /**
@@ -1283,8 +1286,10 @@ fun GlassBottomSheet(
                 topStart = com.haoai.agent.ui.theme.GlassTuning.corner.dp,
                 topEnd = com.haoai.agent.ui.theme.GlassTuning.corner.dp
             ),
-            // 白雾按弹层锚点等比映射（滑杆停默认值时外观零变化，见 popupVeil 注释）
-            surfaceAlpha = com.haoai.agent.ui.theme.GlassTuning.popupVeil(surfaceAlpha),
+            // 2026-10-31 弹层白雾与全局滑杆解耦：固定 0.92（与对话框同档，深色下
+            // glassSurfaceColor 本来就强制 ≥0.94）——原 0.72×滑杆映射在用户调低
+            // 「聊天卡片白雾」后被拖到 0.43，正文直接穿透弹层（真机实锤）
+            surfaceAlpha = surfaceAlpha,
             blurRadius = blurRadius,
             // 统一玻璃配方（2026-10-08）：折射/倍数/色差走全局调参
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
@@ -1377,6 +1382,11 @@ fun GlassBottomSheet(
                 } else {
                     content()
                 }
+                // 2026-10-31：玻璃面延伸到屏幕底（Material 弹层规范），只有**内容**让位
+                // 手势条/导航栏——此前面板底边贴屏幕底，「选择 GGUF 文件」这类贴底按钮
+                // 与系统小横条重叠（用户真机实锤）。面板抬走会漏出一条缝里的页面正文，
+                // 故内容让位而非面板抬升。
+                Spacer(Modifier.navigationBarsPadding())
             }
         }
     }
@@ -1434,9 +1444,10 @@ fun GlassAlertDialog(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp),
             radius = 28.dp,
-            // 白雾/模糊 2026-10-08 接入全局调参（映射见 popupVeil 注释；圆角 28 是
-            // 对话框的版式，不吃滑杆——滑杆标签的"弹层"指 popup/底部弹层/消息操作）
-            surfaceAlpha = com.haoai.agent.ui.theme.GlassTuning.popupVeil(0.92f),
+            // 2026-10-31 弹层白雾与全局滑杆解耦：固定 0.92 可读档——原 popupVeil(0.92)
+            // 在用户调低「聊天卡片白雾」后被拖到下限 0.55，编辑档案等弹窗正文穿透
+            // （用户真机实锤）。圆角 28 是对话框版式，不吃滑杆。
+            surfaceAlpha = 0.92f,
             blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
             // 统一玻璃配方（2026-10-08）：原继承 lensRadius=28×默认2=位移56 全 App
             // 最重；折射/倍数走全局调参，色差改走开关

@@ -3619,6 +3619,22 @@ private fun LazyListScope.themeItems(
             backdrop = backdrop
         )
     }
+    // 还原默认（2026-10-31 移位）：原来缀在「光泽」组末行，但它一键还原的是**本页
+    // 全部**玻璃参数，挂在单组下面误导归属（用户指出）。提到预览卡正下方的独立行，
+    // 预览卡就是"全部参数的现场效果"，位置语义刚好衔接。
+    item {
+        Column(
+            Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            TextButton(onClick = { vm.resetGlass() }) { Text("还原默认参数") }
+            Text(
+                "将下方玻璃风格/全局/折射/光泽/页面卡/顶栏全部恢复出厂档",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 
     // ── 调参分三组（2026-10-10 对照 Kyant0 玻璃实验室重排）：
     //    全局几何 / 折射 / 光泽。裸标题在卡外（与其他段落一致）。
@@ -3663,7 +3679,7 @@ private fun LazyListScope.themeItems(
             t.blur; t.veil; t.corner; t.highlight; t.shadow
             GlassSliderRow("磨砂模糊（聊天卡片/弹层）", dpText(t.blur), "影响：消息卡片、弹层、侧边抽屉、任务面板", t.blur, 0f..16f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.blur = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("聊天卡片白雾", "${Math.round(t.veil * 100)}%", "影响：消息卡片、弹层", t.veil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.veil = it }
+            GlassSliderRow("聊天卡片白雾", "${Math.round(t.veil * 100)}%", "影响：消息卡片（弹窗/弹层 2026-10-31 起固定可读档，不再跟此滑杆）", t.veil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.veil = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             GlassSliderRow("玻璃圆角", dpText(t.corner), "影响：页面卡片、弹层顶角（聊天卡片圆角固定 / 顶栏方角 / 输入框胶囊形固定）", t.corner, 0f..32f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.corner = it }
         }
@@ -3713,17 +3729,17 @@ private fun LazyListScope.themeItems(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
             )
+            // 2026-10-31：「还原默认」按钮移到预览卡下方独立行（它还原的是本页全部
+            // 参数，不再缀在光泽组里误导归属）；此处只留作用域说明
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.Center
             ) {
                 Text(
                     "折射/模糊全局统一生效；白雾分聊天/页面两档",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                TextButton(onClick = { vm.resetGlass() }) { Text("还原默认") }
             }
         }
     }

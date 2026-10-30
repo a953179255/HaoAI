@@ -122,13 +122,13 @@ object GlassTuning {
     var btnLensAmount by mutableFloatStateOf(DEFAULT_BTN_LENS_AMOUNT)
 
     /**
-     * 弹层白雾映射：滑杆 veil（默认 0.48）按 [anchor]/0.48 等比放大到各弹层
-     * 原有的档位锚点（对话框/消息操作 0.92、底部弹层 0.72、Popup 0.52）——
-     * 滑杆停默认值时外观与硬编码时代零差别；下限 anchor×0.6 保可读
-     * （弹层压在正文上，太透字会穿出来）。滑杆标着"影响：弹层"却一直没接，
-     * 2026-10-08 用户实测发现后补上。
+     * （已删除 2026-10-31）弹层白雾映射 popupVeil：曾把全局 veil 滑杆按锚点等比映射到
+     * 各弹层（对话框/消息操作 0.92、底部弹层 0.72、菜单 0.52），下限 anchor×0.6。
+     * 用户把「聊天卡片白雾」调到 0.2 后，全部弹层被拖到 0.43~0.55，正文穿透
+     * （添加模型弹层、编辑档案弹窗真机实锤）。裁决：弹层是固定窗口，可读性优先、
+     * 不需要好看也不常呼出 ⇒ 表面白雾改为**各弹层固定档**（对话框/底部弹层/消息
+     * 操作 0.92、菜单 0.85），不再进「主题外观」调节；模糊/折射仍走全局统一配方。
      */
-    fun popupVeil(anchor: Float): Float = (veil / DEFAULT_VEIL * anchor).coerceIn(anchor * 0.6f, 0.98f)
 
     /** 从持久化参数灌入（App 启动时调用） */
     fun loadFrom(p: com.haoai.agent.data.GlassParams) {
