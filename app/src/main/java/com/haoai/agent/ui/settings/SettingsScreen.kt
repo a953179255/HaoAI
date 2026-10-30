@@ -2230,8 +2230,8 @@ item {
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                RadioButton(selected = settings.dreamProviderId == "local", onClick = { vm.setDreamProvider("local") })
-                Column(Modifier.padding(start = 4.dp).weight(1f)) {
+                CompactRadio(selected = settings.dreamProviderId == "local")
+                Column(Modifier.padding(start = 14.dp).weight(1f)) {
                     Text("端侧小模型", style = MaterialTheme.typography.bodySmall)
                     Text(
                         "推荐，零 token 消耗 · llama.cpp 本地运行 · ${vm.llamaModelFile() ?: "未下载"}",
@@ -2261,14 +2261,14 @@ item {
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .clickable { vm.setDreamProvider(p.id) }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    RadioButton(selected = settings.dreamProviderId == p.id, onClick = { vm.setDreamProvider(p.id) })
+                    CompactRadio(selected = settings.dreamProviderId == p.id)
                     Text(
                         "${p.name} · ${p.model}",
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(start = 4.dp)
+                        modifier = Modifier.padding(start = 14.dp)
                     )
                 }
             }
@@ -5639,6 +5639,34 @@ private fun formatTokens(n: Long): String = when {
     n >= 1_000_000 -> String.format(java.util.Locale.US, "%.2fM", n / 1_000_000.0)
     n >= 1_000 -> String.format(java.util.Locale.US, "%.1fK", n / 1_000.0)
     else -> "$n"
+}
+
+/** 记忆管理模型列表的紧凑圆形单选（2026-11-01）：RadioButton 有 48dp 最小触控
+ *  目标强制，单行文字行被撑出一圈空白（用户实锤「间隔有点大」）；整行本身可点，
+ *  触控目标由整行承担，圆圈只管视觉。 */
+@Composable
+private fun CompactRadio(selected: Boolean) {
+    Box(
+        Modifier
+            .size(20.dp)
+            .clip(CircleShape)
+            .border(
+                2.dp,
+                if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                CircleShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        if (selected) {
+            Box(
+                Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+        }
+    }
 }
 
 @Composable
