@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -698,11 +699,11 @@ private fun ImportOptionRow(title: String, subtitle: String, onClick: () -> Unit
     Column(
         Modifier
             .fillMaxWidth()
+            // 2026-10-31：clip 必须在 clickable 之前，否则按压涟漪是直角（扫描实锤的
+            // 全项目唯一一处顺序坑）
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .background(
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                RoundedCornerShape(12.dp)
-            )
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)

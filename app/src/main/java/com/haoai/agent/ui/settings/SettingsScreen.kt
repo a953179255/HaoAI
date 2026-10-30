@@ -3622,16 +3622,33 @@ private fun LazyListScope.themeItems(
     // 全部**玻璃参数，挂在单组下面误导归属（用户指出）。提到预览卡正下方的独立行，
     // 预览卡就是"全部参数的现场效果"，位置语义刚好衔接。
     item {
+        // 2026-10-31：一键还原原是裸点击即执行（用户要求防误触），加确认弹窗
+        var confirmReset by remember { mutableStateOf(false) }
         Column(
             Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            TextButton(onClick = { vm.resetGlass() }) { Text("还原默认参数") }
+            TextButton(onClick = { confirmReset = true }) { Text("还原默认参数") }
             Text(
                 "将下方玻璃风格/全局/折射/光泽/页面卡/顶栏全部恢复出厂档",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+        if (confirmReset) {
+            com.haoai.agent.ui.common.GlassAlertDialog(
+                backdrop = backdrop,
+                title = "还原默认参数？",
+                onDismiss = { confirmReset = false },
+                confirmLabel = "还原",
+                onConfirm = {
+                    vm.resetGlass()  // 内部已含落盘（persistGlass），勿重复写
+                    confirmReset = false
+                },
+                dismissLabel = "取消"
+            ) {
+                Text("玻璃风格 / 全局玻璃 / 折射 / 光泽 / 页面卡 / 顶栏的全部参数将恢复出厂档。")
+            }
         }
     }
 

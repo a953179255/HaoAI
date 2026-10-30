@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -51,6 +52,7 @@ import com.haoai.agent.platform.llama.LlamaServerController
 import com.haoai.agent.platform.llama.LlamaState
 import com.haoai.agent.ui.SettingsViewModel
 import com.haoai.agent.ui.common.GlassAlertDialog
+import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.GlassBottomSheet
 import com.haoai.agent.ui.common.HaoNote
 import com.haoai.agent.ui.common.HaoSwitch
@@ -147,36 +149,47 @@ private fun ParamLabel(label: String, value: String) {
 private fun StepperRow(
     value: Int,
     display: String,
+    backdrop: LayerBackdrop,
     onMinus: () -> Unit,
     onPlus: () -> Unit,
     canMinus: Boolean = true,
     canPlus: Boolean = true
 ) {
+    // 2026-10-31：原 surfaceVariant 实心方块与全 App 液态玻璃按钮材质打架（用户指出），
+    // 换 LiquidGlassButton（展示玻璃配方：弱磨砂+折射+跟手弹性）
     Row(
         Modifier.padding(top = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable(enabled = canMinus) { onMinus() }
-                .padding(horizontal = 14.dp, vertical = 5.dp)
-        ) { Text("−", style = MaterialTheme.typography.titleSmall) }
+        LiquidGlassButton(
+            onClick = onMinus,
+            backdrop = backdrop,
+            enabled = canMinus
+        ) {
+            Text(
+                "−", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.padding(horizontal = 15.dp, vertical = 5.dp)
+            )
+        }
         Text(
             display,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 10.dp)
+            modifier = Modifier.padding(horizontal = 8.dp)
         )
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable(enabled = canPlus) { onPlus() }
-                .padding(horizontal = 14.dp, vertical = 5.dp)
-        ) { Text("＋", style = MaterialTheme.typography.titleSmall) }
+        LiquidGlassButton(
+            onClick = onPlus,
+            backdrop = backdrop,
+            enabled = canPlus
+        ) {
+            Text(
+                "＋", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.padding(horizontal = 15.dp, vertical = 5.dp)
+            )
+        }
     }
 }
 
@@ -354,6 +367,36 @@ private fun ActionRow(content: @Composable () -> Unit) {
     ) { content() }
 }
 
+/**
+ * 行内次级动作小胶囊（设为当前/移除/获取/引用原文件，2026-10-31）：
+ * 原裸文字 clickable 的按压涟漪是直角且没有可见边界（用户点名「移除」没有背景），
+ * 统一给圆底+细描边；danger=红色调（删除类）。
+ */
+@Composable
+private fun RowActionPill(
+    text: String,
+    danger: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val c = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(999.dp),
+        color = c.copy(alpha = if (enabled) 0.10f else 0.05f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.copy(alpha = if (enabled) 0.35f else 0.15f))
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = c.copy(alpha = if (enabled) 1f else 0.5f),
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 4.dp)
+        )
+    }
+}
+
 // ── 模型库卡 ──────────────────────────────────────────────
 
 @Composable
@@ -367,6 +410,8 @@ private fun LocalModelLibraryCard(vm: SettingsViewModel, backdrop: LayerBackdrop
                 Text("模型库", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 Badge("${lib.size} 个")
             }
+            // 「1 个」徽标与首个模型的「使用中」徽标原贴在一起（用户指出），留 10dp
+            if (lib.isNotEmpty()) Spacer(Modifier.height(10.dp))
             if (lib.isEmpty()) {
                 Text(
                     "还没有模型：点下方「添加模型」从广场下载，或「扫描手机」直读手机里已有的 GGUF（不复制、不占双份空间）。",
@@ -430,12 +475,7 @@ private fun ModelRow(vm: SettingsViewModel, m: SettingsViewModel.LocalModelUi, o
                 Badge("使用中", Tone.Ok)
                 Spacer(Modifier.padding(2.dp))
             } else {
-                Text(
-                    "设为当前",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { vm.useLibraryModel(m) }.padding(horizontal = 6.dp, vertical = 4.dp)
-                )
+                RowActionPill("设为当前") { vm.useLibraryModel(m) }
             }
         }
         Row(
@@ -469,12 +509,7 @@ private fun ModelRow(vm: SettingsViewModel, m: SettingsViewModel.LocalModelUi, o
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Text(
-                if (m.isDevice) "移除" else "删除",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.clickable { onRequestDelete() }.padding(horizontal = 6.dp, vertical = 2.dp)
-            )
+            RowActionPill(if (m.isDevice) "移除" else "删除", danger = true) { onRequestDelete() }
         }
     }
 }
@@ -492,6 +527,8 @@ private fun LocalParamsCard(vm: SettingsViewModel, backdrop: LayerBackdrop) {
     var rep by remember(settings.providers) { mutableStateOf(vm.localAdvancedSampling().second) }
     var seedText by remember(settings.localSeed) { mutableStateOf(settings.localSeed.toString()) }
     var advOpen by remember { mutableStateOf(false) }
+    // 2026-10-31：一键清参数原是裸点击即执行（用户要求防误触），加确认弹窗
+    var showResetConfirm by remember { mutableStateOf(false) }
 
     GlassGroup(backdrop) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -501,12 +538,11 @@ private fun LocalParamsCard(vm: SettingsViewModel, backdrop: LayerBackdrop) {
                     "恢复默认",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable {
-                        vm.setLocalThreads(0); vm.setLocalBackend("auto"); vm.setLocalFlashAttn("auto")
-                        vm.setLocalKvCache("f16"); vm.setLocalMmap(true); vm.setLocalSeed(-1)
-                        vm.setLocalSampling(0.7f, 0.95f); vm.setLocalAdvancedSampling(40, 1.1f)
-                        temp = 0.7f; topP = 0.95f; topK = 40; rep = 1.1f; seedText = "-1"
-                    }.padding(horizontal = 6.dp, vertical = 2.dp)
+                    // 按压涟漪先 clip 圆角（原裸 clickable 涟漪直角，用户点名）
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable { showResetConfirm = true }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
                 )
             }
 
@@ -546,6 +582,7 @@ private fun LocalParamsCard(vm: SettingsViewModel, backdrop: LayerBackdrop) {
             StepperRow(
                 value = topK,
                 display = if (topK <= 0) "默认" else "$topK",
+                backdrop = backdrop,
                 onMinus = { topK = (topK - 5).coerceAtLeast(0); vm.setLocalAdvancedSampling(topK, rep) },
                 onPlus = { topK = (topK + 5).coerceAtMost(200); vm.setLocalAdvancedSampling(topK, rep) },
                 canPlus = topK < 200
@@ -566,6 +603,7 @@ private fun LocalParamsCard(vm: SettingsViewModel, backdrop: LayerBackdrop) {
             StepperRow(
                 value = settings.localThreads,
                 display = if (settings.localThreads <= 0) "自动" else "${settings.localThreads}",
+                backdrop = backdrop,
                 onMinus = { vm.setLocalThreads(settings.localThreads - 1) },
                 onPlus = { vm.setLocalThreads(settings.localThreads + 1) },
                 canMinus = settings.localThreads > 0,
@@ -591,7 +629,11 @@ private fun LocalParamsCard(vm: SettingsViewModel, backdrop: LayerBackdrop) {
                 "高级参数（FlashAttention / KV 量化 / mmap / 种子）",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable { advOpen = !advOpen }.padding(top = 12.dp, bottom = 2.dp)
+                modifier = Modifier
+                    .padding(top = 10.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable { advOpen = !advOpen }
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
             )
             AnimatedVisibility(advOpen) {
                 Column {
@@ -642,6 +684,24 @@ private fun LocalParamsCard(vm: SettingsViewModel, backdrop: LayerBackdrop) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 10.dp)
             )
+        }
+    }
+    if (showResetConfirm) {
+        GlassAlertDialog(
+            backdrop = backdrop,
+            title = "恢复默认参数？",
+            onDismiss = { showResetConfirm = false },
+            confirmLabel = "恢复",
+            onConfirm = {
+                vm.setLocalThreads(0); vm.setLocalBackend("auto"); vm.setLocalFlashAttn("auto")
+                vm.setLocalKvCache("f16"); vm.setLocalMmap(true); vm.setLocalSeed(-1)
+                vm.setLocalSampling(0.7f, 0.95f); vm.setLocalAdvancedSampling(40, 1.1f)
+                temp = 0.7f; topP = 0.95f; topK = 40; rep = 1.1f; seedText = "-1"
+                showResetConfirm = false
+            },
+            dismissLabel = "取消"
+        ) {
+            Text("采样 / Top-K / 重复惩罚 / 线程 / 后端 / 种子将恢复为推荐默认值；上下文窗口保持不变。")
         }
     }
 }
@@ -786,18 +846,10 @@ private fun DownloadTab(vm: SettingsViewModel, backdrop: LayerBackdrop) {
                         )
                     }
                 }
-                else -> Text(
+                else -> RowActionPill(
                     "获取",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = if (vm.llamaDownloadingName == null) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier
-                        .clickable(enabled = vm.llamaDownloadingName == null) {
-                            vm.downloadCatalogModel(e.url, e.fileName)
-                        }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                )
+                    enabled = vm.llamaDownloadingName == null
+                ) { vm.downloadCatalogModel(e.url, e.fileName) }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f))
@@ -874,18 +926,10 @@ private fun ScanTab(vm: SettingsViewModel) {
                             modifier = Modifier.padding(top = 2.dp)
                         )
                     }
-                    Text(
-                        "引用原文件",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clickable {
-                                vm.useDeviceModel(sm.file.absolutePath)
-                                vm.closeLlamaSheet()
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    )
+                    RowActionPill("引用原文件") {
+                        vm.useDeviceModel(sm.file.absolutePath)
+                        vm.closeLlamaSheet()
+                    }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f))
             }
@@ -926,7 +970,10 @@ private fun LogSheetContent(vm: SettingsViewModel) {
             "刷新",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.clickable { lines = vm.llamaLogTail() }.padding(horizontal = 6.dp)
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .clickable { lines = vm.llamaLogTail() }
+                .padding(horizontal = 10.dp, vertical = 4.dp)
         )
         val clipboard = LocalClipboardManager.current
         Text(
@@ -934,8 +981,9 @@ private fun LogSheetContent(vm: SettingsViewModel) {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
                 .clickable { clipboard.setText(AnnotatedString(lines.joinToString("\n"))) }
-                .padding(horizontal = 6.dp)
+                .padding(horizontal = 10.dp, vertical = 4.dp)
         )
     }
     Surface(
