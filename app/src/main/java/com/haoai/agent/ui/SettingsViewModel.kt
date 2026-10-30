@@ -576,8 +576,33 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     /** 用量页会话排行显示标题（5.4）；读取失败回退空串。 */
-    fun sessionTitleOf(sessionId: String): String =
-        runCatching { c.sessionStore.load(sessionId)?.title.orEmpty() }.getOrDefault("")
+    /**
+     * 用量页会话标题（2026-10-30 修卡顿）：原先每行同步 [AppContainer.sessionStore.load]，
+     * 把整个会话文件（含全部消息与工具结果，长会话数 MB）JSON 反序列化一遍只为拿标题——
+     * 分布卡会话 tab 5 行 + 会话排行 5 行 = 最多 10 次重 IO 全在切页动画的主线程上。
+     * 改为：读内存缓存；未命中立即给占位符、后台线程加载后写回缓存并 bump tick
+     * 触发重组（组合期读 tick 建立订阅，标题列几十毫秒后原地刷新，肉眼无感）。
+     */
+    private val sessionTitleCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val sessionTitlePending =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private var sessionTitleTick by mutableStateOf(0)
+
+    fun sessionTitleOf(sessionId: String): String {
+        if (sessionId.isBlank()) return ""
+        sessionTitleCache[sessionId]?.let { return it }
+        if (sessionTitlePending.add(sessionId)) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val title = runCatching { c.sessionStore.load(sessionId)?.title.orEmpty() }
+                    .getOrDefault("").ifBlank { "会话 ${sessionId.take(8)}" }
+                sessionTitleCache[sessionId] = title
+                sessionTitlePending.remove(sessionId)
+                sessionTitleTick++
+            }
+        }
+        sessionTitleTick // 组合期读取：建立订阅，后台加载完成后本页自动刷新
+        return "会话 ${sessionId.take(8)}"
+    }
 
     val settings: kotlinx.coroutines.flow.StateFlow<AppSettings> =
         c.settingsFlow
